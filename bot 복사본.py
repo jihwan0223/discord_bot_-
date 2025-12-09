@@ -1,3 +1,4 @@
+import json
 import discord
 import os
 import certifi
@@ -440,6 +441,114 @@ async def meal(interaction: discord.Interaction, type: app_commands.Choice[str])
     except Exception as e:
         await interaction.followup.send("급식 정보를 가져오는 중 오류가 발생했습니다.")
 
+
+#도박 기능
+def load_data():
+    if not os.path.exists("users.json"):
+        with open("users.json", "w", encoding="utf-8") as f:
+            json.dump({}, f, indent=4)
+    with open("users.json", "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_data(data):
+    with open("users.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
+
+# 유저 정보 초기화 
+def ensure_user(user_id):
+    data = load_data()
+    if str(user_id) not in data:
+        data[str(user_id)] = {
+            "money": 0,
+            "last_daily": "0"
+        }
+        save_data(data)
+    return data
+
+
+
+# 돈 확인 
+@bot.tree.command(name="돈", description="현재 보유 금액을 확인합니다.")
+async def money(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    data = ensure_user(user_id)
+
+    money = data[str(user_id)]["money"]
+    await interaction.response.send_message(
+        f"💰 {interaction.user.mention} 님의 보유 금액: **{money}원**"
+    )
+
+
+# 출석 체크
+@bot.tree.command(name="돈받기", description="일일 보상 10000원을 받습니다.")
+async def daily(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    data = ensure_user(user_id)
+
+    today = str(date.today())
+    last = data[str(user_id)]["last_daily"]
+
+    if last == today:
+        return await interaction.response.send_message("오늘 이미 돈을 받으셨습니다!", ephemeral=True)
+
+    data[str(user_id)]["money"] += 10000
+    data[str(user_id)]["last_daily"] = today
+    save_data(data)
+
+    await interaction.response.send_message(
+        f"돈받기 완료! 10000원이 지급되었습니다.\n"
+        f"💰 현재 금액: {data[str(user_id)]['money']}원"
+    )
+
+
+# 도박 명령어
+@bot.tree.command(name="도박", description="1 또는 2 중 하나를 선택해서 도박합니다.(test)")
+@app_commands.describe(choice="1 또는 2 중 하나를 입력하세요.")
+async def gamble(interaction: discord.Interaction, choice: int):
+
+    if choice not in [1, 2]:
+        return await interaction.response.send_message(
+            "1 또는 2만 입력할 수 있어요!", ephemeral=True
+        )
+
+    await interaction.response.defer()
+
+    user_id = interaction.user.id
+    data = ensure_user(user_id)
+
+    current_money = data[str(user_id)]["money"]
+    if current_money <= 0:
+        return await interaction.followup.send(
+            "💀 돈이 0원이어서 도박을 할 수 없습니다!\n"
+            "👉 `/돈받기`로 돈을 먼저 받아보세요.",
+            ephemeral=True
+        )
+    
+    bot_choice = random.choice([1, 2])
+    current_money = data[str(user_id)]["money"]
+
+    # 결과 계산
+    if bot_choice == choice:
+        result = "🎉 **성공! 돈이 2배가 되었습니다!**"
+        new_money = current_money * 2
+    else:
+        result = "💀 **실패... 보유 금액이 1/2원이 되었습니다.**"
+        new_money = current_money // 2
+
+    # 저장
+    data[str(user_id)]["money"] = new_money
+    save_data(data)
+
+    await interaction.followup.send(
+        f"🎰 **도박 결과!**\n"
+        f"당신의 선택: `{choice}`\n"
+        f"봇의 선택: `{bot_choice}`\n\n"
+        f"{result}\n"
+        f"💰 현재 보유 금액: {new_money}원"
+    )
+
+    
 
 # 오류 처리
 @bot.event
