@@ -1,9 +1,10 @@
-import json
 import discord
 import os
+import json
 import certifi
 import pytz
 import random
+import time
 import ssl
 import aiohttp
 import asyncio
@@ -12,8 +13,10 @@ from discord.ext import commands
 from discord import app_commands
 from discord import Interaction, Member
 from datetime import datetime
+from datetime import date
 from datetime import timedelta
 from dotenv import load_dotenv
+
 
 # tts
 from gtts import gTTS
@@ -23,32 +26,37 @@ from discord.opus import load_opus, is_loaded
 #Opus 라이브러리 수동 로드
 opus_path = "/opt/homebrew/lib/libopus.dylib"
 
+
 try:
     load_opus(opus_path)
     print("Opus loaded:", is_loaded())
 except Exception as e:
     print("Opus load failed:", e)
 
-# tts 전역변수
+
+# 전역변수
 tts_enabled = False
 tts_channel_id = None
 
-
+POINT_FILE = "points.json"
 
 # SSL 인증서 경로 지정
 os.environ['SSL_CERT_FILE'] = certifi.where()
 ssl_context = ssl.create_default_context(cafile=certifi.where())
 
-# .env 파일 로드
-#load_dotenv()
-#TOKEN = os.getenv("DISCORD_TOKEN")
+# 토큰
+load_dotenv()
+TOKEN = os.getenv("DISCORD_TOKEN")
 
 # 봇 intents 설정
 intents = discord.Intents.default()
 intents.message_content = True
 
+
 # 봇 생성
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+
 
 # 봇 로그인
 @bot.event
@@ -60,15 +68,19 @@ async def on_ready():
     print("clear")
 #    for guild in bot.guilds:
 #        print(f"- {guild.name} ({guild.id})")
-    try:
-        synced = await bot.tree.sync()
-        print(f"{len(synced)}")
-    except Exception as e:
-        print(f"명령어 등록 실패: {e}")
+
+    if not getattr(bot, "synced", False):
+        try:
+            synced = await bot.tree.sync()
+            print(f"{len(synced)}")
+        except Exception as e:
+            print(f"명령어 등록 실패: {e}")
+
+        bot.synced = True
+
 
 
 # 관리자 전용 명령어
-
 @bot.tree.command(name="admin", description="사용자에게 관리자 권한이 있는지 확인합니다.") 
 @app_commands.checks.has_permissions(administrator=True)
 async def admin(interaction: discord.Interaction):
@@ -195,7 +207,7 @@ async def on_message(message):
 
 
 
-# / 명령어 기본대화
+# 기본
 @bot.tree.command(name="봇", description="봇이 살아있는지 확인합니다")
 async def 봇(interaction: discord.Interaction):
     await interaction.response.send_message("살음")
@@ -386,7 +398,7 @@ async def 강아지(interaction: discord.Interaction):
 
 
 # 급식 정보
-#NEIS_API_KEY = "APIKEY"
+NEIS_API_KEY = "APIKEY"
 ATPT = "R10"
 SCHOOL = "8750829"
 
@@ -443,6 +455,7 @@ async def meal(interaction: discord.Interaction, type: app_commands.Choice[str])
 
 
 #도박 기능
+# json
 def load_data():
     if not os.path.exists("users.json"):
         with open("users.json", "w", encoding="utf-8") as f:
@@ -456,99 +469,183 @@ def save_data(data):
 
 
 # 유저 정보 초기화 
-def ensure_user(user_id):
+def ensure_user(user_id: int, username: str):
     data = load_data()
-    if str(user_id) not in data:
-        data[str(user_id)] = {
+    uid = str(user_id)
+
+    if uid not in data:
+        data[uid] = {
+            "name": username,
             "money": 0,
             "last_daily": "0"
         }
         save_data(data)
-    return data
+        return data
 
+    # name 없으면 추가
+    if "name" not in data[uid]:
+        data[uid]["name"] = username
+
+    # 닉네임 변경 시 업데이트
+    if data[uid]["name"] != username:
+        data[uid]["name"] = username
+
+    save_data(data)
+    return data
 
 
 # 돈 확인 
 @bot.tree.command(name="돈", description="현재 보유 금액을 확인합니다.")
 async def money(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    data = ensure_user(user_id)
 
+    user_id = interaction.user.id
+    username = interaction.user.display_name
+
+    data = ensure_user(user_id, username)
     money = data[str(user_id)]["money"]
-    await interaction.response.send_message(
-        f"💰 {interaction.user.mention} 님의 보유 금액: **{money}원**"
-    )
+
+    await interaction.response.send_message(f"💰 {username} 님의 보유 금액: **{money}원**")
+
+
+
+# 랭킹
+@bot.tree.command(name="랭킹", description="돈 랭킹을 확인합니다.")
+async def ranking(interaction: discord.Interaction):
+
+    data = load_data()
+    ranking = sorted(data.items(), key=lambda x: x[1]["money"], reverse=True)
+
+    embed = discord.Embed(title="💰 돈 랭킹 TOP 10", color=0xFFD700)
+
+    for i, (user_id, info) in enumerate(ranking[:10], start=1):
+
+        member = interaction.guild.get_member(int(user_id))
+        name = member.display_name if member else info["name"]
+
+        embed.add_field(name=f"#{i} {name}", value=f"💵 {info['money']}원", inline=False)
+
+    await interaction.response.send_message(embed=embed)
+
+    embed = discord.Embed(title="💰 돈 랭킹 TOP 10", color=0xFFD700)
 
 
 # 출석 체크
-@bot.tree.command(name="돈받기", description="일일 보상 10000원을 받습니다.")
-async def daily(interaction: discord.Interaction):
+@bot.tree.command(name="돈받기", description="일일 출석 체크로 10000원을 받습니다.")
+async def daily_money(interaction: discord.Interaction):
+
     user_id = interaction.user.id
-    data = ensure_user(user_id)
+    username = interaction.user.display_name
+
+    data = ensure_user(user_id, username)
 
     today = str(date.today())
     last = data[str(user_id)]["last_daily"]
 
     if last == today:
-        return await interaction.response.send_message("오늘 이미 돈을 받으셨습니다!", ephemeral=True)
+        return await interaction.response.send_message("❌ 오늘 이미 돈받기를 했습니다!", ephemeral=True)
 
     data[str(user_id)]["money"] += 10000
     data[str(user_id)]["last_daily"] = today
     save_data(data)
 
     await interaction.response.send_message(
-        f"돈받기 완료! 10000원이 지급되었습니다.\n"
-        f"💰 현재 금액: {data[str(user_id)]['money']}원"
-    )
+        f"💰 10000원이 지급되었습니다!\n"
+        f"현재 금액: **{data[str(user_id)]['money']}원**")
+    
+
+# 노동
+@bot.tree.command(name="돈벌기", description="노동을 하여 돈을 법니다.")
+async def daily_money(interaction: discord.Interaction):
+
+    user_id = interaction.user.id
+    username = interaction.user.display_name
+
+    data = ensure_user(user_id, username)
+    user_id = str(user_id)
+
+    if "last_work" not in data[user_id]:
+        data[user_id]["last_work"] = 0
+
+    # 쿨타임
+    now = time.time()
+    cooldown = 30 
+
+    if now - data[user_id]["last_work"] < cooldown:
+        remain = int(cooldown - (now - data[user_id]["last_work"]))
+        return await interaction.response.send_message(
+            "⏳ 휴식시간 입니다! {remain}초 후 다시 시도하세요.", ephemeral=True)
+
+    data = ensure_user(user_id, username)
+
+    data[user_id]["last_work"] = now
+    data[str(user_id)]["money"] += 100
+    save_data(data)
+
+    await interaction.response.send_message(
+        f"💰 최저시급 100원이 지급되었습니다!\n"
+        f"현재 금액: **{data[str(user_id)]['money']}원**")
+
 
 
 # 도박 명령어
-@bot.tree.command(name="도박", description="1 또는 2 중 하나를 선택해서 도박합니다.(test)")
-@app_commands.describe(choice="1 또는 2 중 하나를 입력하세요.")
-async def gamble(interaction: discord.Interaction, choice: int):
+@bot.tree.command(name="도박", description="합법임")
+@app_commands.describe(choice="1 또는 2를 선택하세요.", bet="배팅 금액을 입력하세요.")
+async def gamble(interaction: discord.Interaction, choice: int, bet: app_commands.Range[int, 500, None]):
 
     if choice not in [1, 2]:
-        return await interaction.response.send_message(
-            "1 또는 2만 입력할 수 있어요!", ephemeral=True
-        )
+        return await interaction.response.send_message("❌ 1 또는 2만 입력할 수 있어요!", ephemeral=True)
 
     await interaction.response.defer()
 
     user_id = interaction.user.id
-    data = ensure_user(user_id)
+    username = interaction.user.display_name
 
-    current_money = data[str(user_id)]["money"]
-    if current_money <= 0:
-        return await interaction.followup.send(
-            "💀 돈이 0원이어서 도박을 할 수 없습니다!\n"
-            "👉 `/돈받기`로 돈을 먼저 받아보세요.",
-            ephemeral=True
-        )
-    
+    data = ensure_user(user_id, username)
+    money = data[str(user_id)]["money"]
+
+    if money < bet:
+        return await interaction.followup.send(f"❌ 보유 금액 부족!\n현재 금액: {money}원", ephemeral=True)
+
     bot_choice = random.choice([1, 2])
-    current_money = data[str(user_id)]["money"]
 
-    # 결과 계산
-    if bot_choice == choice:
-        result = "🎉 **성공! 돈이 2배가 되었습니다!**"
-        new_money = current_money * 2
+    # 확률
+    win = random.choice([True, False])
+
+    if win and bot_choice == choice:
+        data[str(user_id)]["money"] += bet
+        result = f"🎉 성공! +{bet}원"
     else:
-        result = "💀 **실패... 보유 금액이 1/2원이 되었습니다.**"
-        new_money = current_money // 2
+        data[str(user_id)]["money"] -= bet
+        result = f"💀 실패... -{bet}원"
 
-    # 저장
-    data[str(user_id)]["money"] = new_money
     save_data(data)
 
     await interaction.followup.send(
-        f"🎰 **도박 결과!**\n"
-        f"당신의 선택: `{choice}`\n"
-        f"봇의 선택: `{bot_choice}`\n\n"
-        f"{result}\n"
-        f"💰 현재 보유 금액: {new_money}원"
+        f"🎰 **도박 결과**\n"
+        f"확률 : 50%\n\n"
+        f"{result}\n\n"
+        f"💰 현재 금액: {data[str(user_id)]['money']}원"
     )
 
-    
+# 초기화
+@bot.tree.command(name="초기화", description="???")
+async def 초기화(interaction: discord.Interaction):
+
+    user_id = interaction.user.id
+    username = interaction.user.display_name
+
+    data = load_data()
+    uid = str(user_id)
+
+    if uid in data:
+        del data[uid]
+        save_data(data)
+        await interaction.response.send_message("모든 기록을 초기화했습니다!")
+        
+    else:
+        await interaction.response.send_message("돈없어", empheral=True)
+
+
 
 # 오류 처리
 @bot.event
@@ -558,4 +655,4 @@ async def on_command_error(ctx, error):
     raise error
 
 
-#bot.run("토큰")
+#bot.run("TOKEN")
