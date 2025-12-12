@@ -38,7 +38,7 @@ except Exception as e:
 tts_enabled = False
 tts_channel_id = None
 
-POINT_FILE = "points.json"
+POINT_FILE = "users.json"
 
 # SSL 인증서 경로 지정
 os.environ['SSL_CERT_FILE'] = certifi.where()
@@ -65,7 +65,7 @@ async def on_ready():
     if not hasattr(bot, "aiohttp_session") or bot.aiohttp_session.closed:
         bot.aiohttp_session = aiohttp.ClientSession()
 
-    print("clear")
+    print("start")
 #    for guild in bot.guilds:
 #        print(f"- {guild.name} ({guild.id})")
 
